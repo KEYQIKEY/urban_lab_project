@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attachments Management</title>
+    <link rel="stylesheet" 
+href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script 
+src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</head>
+<body>
+<div class="container mt-5">
+    <h1 class="text-center mb-4">Attachments Management</h1>
+
+    <!-- Add Attachment Button -->
+    <button class="btn btn-primary mb-3" 
+onclick="showAddAttachmentModal()">Add Attachment</button>
+
+    <!-- Attachments Table -->
+    <table class="table table-bordered">
+        <thead class="table-dark">
+            <tr>
+                <th>ID</th>
+                <th>Interaction ID</th>
+                <th>Event ID</th>
+                <th>Filename</th>
+                <th>File URL</th>
+                <th>Uploaded By</th>
+                <th>Uploaded At</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="attachment-table">
+            <!-- Attachments will be dynamically loaded here -->
+        </tbody>
+    </table>
+</div>
+
+<!-- Add Attachment Modal -->
+<div class="modal fade" id="attachment-modal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Attachment</h5>
+                <button type="button" class="btn-close" 
+data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="attachment-form">
+                    <div class="mb-3">
+                        <label for="interaction-id" 
+class="form-label">Interaction ID</label>
+                        <input type="number" id="interaction-id" 
+class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label for="event-id" class="form-label">Event 
+ID</label>
+                        <input type="number" id="event-id" 
+class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label for="filename" 
+class="form-label">Filename</label>
+                        <input type="text" id="filename" class="form-control" 
+required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="file-url" class="form-label">File 
+URL</label>
+                        <input type="url" id="file-url" class="form-control" 
+required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="uploaded-by" class="form-label">Uploaded 
+By</label>
+                        <input type="number" id="uploaded-by" 
+class="form-control" required>
+                    </div>
+                    <button type="submit" class="btn 
+btn-primary">Save</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Load all attachments
+    function loadAttachments() {
+        fetch('/api/attachments')
+            .then(response => response.json())
+            .then(attachments => {
+                const tableBody = 
+document.getElementById('attachment-table');
+                tableBody.innerHTML = '';
+                attachments.forEach(attachment => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${attachment.id}</td>
+                        <td>${attachment.interaction_id}</td>
+                        <td>${attachment.event_id}</td>
+                        <td>${attachment.filename}</td>
+                        <td><a href="${attachment.file_url}" 
+target="_blank">${attachment.file_url}</a></td>
+                        <td>${attachment.uploaded_by}</td>
+                        <td>${attachment.uploaded_at}</td>
+                        <td>
+                            <button class="btn btn-danger btn-sm" 
+onclick="deleteAttachment(${attachment.id})">Delete</button>
+                        </td>
+                    `;
+                    tableBody.appendChild(row);
+                });
+            });
+    }
+
+    // Show Add Attachment Modal
+    function showAddAttachmentModal() {
+        document.getElementById('interaction-id').value = '';
+        document.getElementById('event-id').value = '';
+        document.getElementById('filename').value = '';
+        document.getElementById('file-url').value = '';
+        document.getElementById('uploaded-by').value = '';
+        const modal = new 
+bootstrap.Modal(document.getElementById('attachment-modal'));
+        modal.show();
+    }
+
+    // Save Attachment
+    document.getElementById('attachment-form').addEventListener('submit', 
+function(e) {
+        e.preventDefault();
+        const attachment = {
+            interaction_id: document.getElementById('interaction-id').value 
+|| null,
+            event_id: document.getElementById('event-id').value || null,
+            filename: document.getElementById('filename').value,
+            file_url: document.getElementById('file-url').value,
+            uploaded_by: document.getElementById('uploaded-by').value,
+        };
+        fetch('/api/attachments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(attachment),
+        })
+        .then(response => {
+            if (response.ok) {
+                const modal = 
+bootstrap.Modal.getInstance(document.getElementById('attachment-modal'));
+                modal.hide();
+                loadAttachments();
+            } else {
+                alert('Error saving attachment');
+            }
+        });
+    });
+
+    // Delete Attachment
+    function deleteAttachment(id) {
+        if (confirm('Are you sure you want to delete this attachment?')) {
+            fetch(`/api/attachments/${id}`, { method: 'DELETE' })
+                .then(() => loadAttachments());
+        }
+    }
+
+    // Initial load
+    loadAttachments();
+</script>
+</body>
+</html>
+
