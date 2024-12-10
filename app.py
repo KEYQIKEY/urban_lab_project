@@ -1,7 +1,8 @@
 import os
 import logging
+import csv
 from logging.handlers import RotatingFileHandler
-from flask import Flask, jsonify, request, session, redirect, url_for, render_template
+from flask import Flask, jsonify, request, session, redirect, url_for, render_template, make_response
 import pymysql
 
 # App initialization
@@ -71,6 +72,75 @@ def login_view():
             logger.warning(f"Failed login attempt for username: {username}")  
             return render_template('login.html', error="Invalid username or password")
     return render_template('login.html')
+    
+    
+@app.route('/api/upload', methods=['POST'])
+def upload_csv():
+    """
+    Handle CSV file upload and insert data into the database.
+    """
+    file = request.files.get('file')
+    if not file:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    try:
+        # Decode CSV and insert into the database
+        stream = file.stream.read().decode('utf-8')
+        csv_reader = csv.DictReader(stream.splitlines())
+        for row in csv_reader:
+            # Customize for your specific table
+            db.cursor().execute("""
+                INSERT INTO YourTable (column1, column2, column3)
+                VALUES (%s, %s, %s)
+            """, (row['column1'], row['column2'], row['column3']))
+        db.commit()
+        return jsonify({"message": "Data uploaded successfully"}), 200
+    except Exception as e:
+        app.logger.error(f"Error uploading CSV: {e}")
+        return jsonify({"error": "Failed to upload data"}), 500
+        
+@app.route('/api/export', methods=['GET'])
+def export_table():
+    """
+    Export data from a selected table.
+    """
+    table = request.args.get("table")
+    valid_tables = ["events", "interactions", "users"]
+
+    if table not in valid_tables:
+        return jsonify({"error": "Invalid table name"}), 400
+
+    try:
+        # Query based on the selected table
+        query_map = {
+            "events": "SELECT id, name, description, event_date, location FROM events",
+            "interactions": "SELECT id, user_id, interaction_type, details, interaction_date FROM interactions",
+            "users": "SELECT id, name, email, user_type, organization FROM users"
+        }
+        query = query_map[table]
+
+        with db.cursor() as cursor:
+            cursor.execute(query)
+            results = cursor.fetchall()
+
+        # Generate CSV
+        csv_output = "id,name,description,event_date,location\n" if table == "events" else \
+                     "id,user_id,interaction_type,details,interaction_date\n" if table == "interactions" else \
+                     "id,name,email,user_type,organization\n"
+
+        for row in results:
+            csv_output += ",".join(str(value) for value in row) + "\n"
+
+        # Return CSV as response
+        response = make_response(csv_output)
+        response.headers["Content-Disposition"] = f"attachment; filename={table}.csv"
+        response.headers["Content-Type"] = "text/csv"
+        return response
+
+    except Exception as e:
+        app.logger.error(f"Error exporting table {table}: {e}")
+        return jsonify({"error": "Failed to export data"}), 500
+
 
 @app.route('/users', methods=['POST'])
 def add_user_view():
@@ -176,28 +246,6 @@ def dashboard():
             interaction_types=interaction_types
         )
     return redirect(url_for('login'))
-
-@app.route('/api/stats', methods=['GET'])
-def get_stats():
-    """
-    Fetch statistics for the dashboard.
-    """
-    with db.cursor() as cursor:
-        cursor.execute("SELECT COUNT(*) AS user_count FROM Users")
-        user_count = cursor.fetchone()['user_count']
-
-        cursor.execute("SELECT COUNT(*) AS interaction_count FROM Interactions")
-        interaction_count = cursor.fetchone()['interaction_count']
-
-        cursor.execute("SELECT COUNT(*) AS event_count FROM Events")
-        event_count = cursor.fetchone()['event_count']
-
-    return jsonify({
-        "user_count": user_count,
-        "interaction_count": interaction_count,
-        "event_count": event_count
-    })
-
 
 # API ROUTES FOR USERS
 # ---------------------------
@@ -305,83 +353,133 @@ def interactions_page():
     Render the interactions management page.
     """
     return render_template('interactions.html')
-
-# Route to get all interactions
-@app.route('/interactions', methods=['GET'])
+    
+@app.route('/api/interactions', methods=['GET'])
 def get_interactions():
     """
     Fetch all interactions from the Interactions table.
     """
-    with db.cursor() as cursor:
-        cursor.execute("SELECT * FROM Interactions")
-        interactions = cursor.fetchall()
-    return jsonify(interactions)
+    try:
+        with db.cursor() as cursor:
+            
+            cursor.execute("""
+                SELECT 
+                    id, 
+                    user_id, 
+                    interaction_type, 
+                    details, 
+                    DATE_FORMAT(interaction_date, '%Y-%m-%d') AS interaction_date
+                FROM Interactions
+            """)
+            interactions = cursor.fetchall()
+
+        
+        return jsonify(interactions), 200
+    except Exception as e:
+        app.logger.error(f"Error fetching interactions: {e}")
+        return jsonify({"error": "Failed to fetch interactions."}), 500
+
+
+
+
+@app.route('/api/interactions/<int:interaction_id>', methods=['GET'])
+def get_interaction_by_id(interaction_id):
+    """
+    Fetch a specific interaction by its ID.
+    """
+    try:
+        with db.cursor() as cursor:
+            cursor.execute("SELECT * FROM Interactions WHERE id = %s", (interaction_id,))
+            interaction = cursor.fetchone()
+        if interaction:
+            return jsonify(interaction), 200
+        else:
+            return jsonify({"error": "Interaction not found"}), 404
+    except Exception as e:
+        app.logger.error(f"Error fetching interaction: {e}")
+        return jsonify({"error": "Failed to fetch interaction."}), 500
+
 
 # Route to add a new interaction
-@app.route('/interactions', methods=['POST'])
+@app.route('/api/interactions', methods=['POST'])
 def add_interaction():
     """
     Add a new interaction to the Interactions table.
-    Requires: user_id, interaction_type, details, and interaction_date in the request body.
     """
-    data = request.get_json()
-    user_id = data.get('user_id')
-    interaction_type = data.get('interaction_type')
-    details = data.get('details')
-    interaction_date = data.get('interaction_date')
+    try:
+        data = request.get_json()  
+        user_id = data.get('user_id')
+        interaction_type = data.get('interaction_type')
+        details = data.get('details')
+        interaction_date = data.get('interaction_date')
 
-    with db.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO Interactions (user_id, interaction_type, details, interaction_date)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (user_id, interaction_type, details, interaction_date)
-        )
-        db.commit()
-    return jsonify({"message": "Interaction added successfully!"}), 201
+        if not all([user_id, interaction_type, details, interaction_date]):
+            return jsonify({"error": "Missing required fields"}), 400
 
-# Route to get a specific interaction by ID
-@app.route('/interactions/<int:interaction_id>', methods=['GET'])
-def get_interaction(interaction_id):
-    """
-    Fetch an interaction by its unique ID.
-    """
-    with db.cursor() as cursor:
-        cursor.execute("SELECT * FROM Interactions WHERE id = %s", (interaction_id,))
-        interaction = cursor.fetchone()
-    if interaction:
-        return jsonify(interaction)
-    else:
-        return jsonify({"error": "Interaction not found"}), 404
+        with db.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO Interactions (user_id, interaction_type, details, interaction_date)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (user_id, interaction_type, details, interaction_date)
+            )
+            db.commit()
+        return jsonify({"message": "Interaction added successfully!"}), 201
+    except Exception as e:
+        app.logger.error(f"Error adding interaction: {e}")
+        return jsonify({"error": "Failed to add interaction."}), 500
+
 
 # Route to update an interaction
-@app.route('/interactions/<int:interaction_id>', methods=['PUT'])
+@app.route('/api/interactions/<int:interaction_id>', methods=['PUT'])
 def update_interaction(interaction_id):
-    data = request.get_json()
-    interaction_type = data.get('interaction_type')
-    details = data.get('details')
-    interaction_date = data.get('interaction_date')
+    """
+    Update an existing interaction by ID.
+    """
+    try:
+        data = request.get_json()
+        interaction_type = data.get('interaction_type')
+        details = data.get('details')
+        interaction_date = data.get('interaction_date')
 
-    with db.cursor() as cursor:
-        cursor.execute(
-            """
-            UPDATE Interactions
-            SET interaction_type = %s, details = %s, interaction_date = %s
-            WHERE id = %s
-            """,
-            (interaction_type, details, interaction_date, interaction_id)
-        )
-        db.commit()
-    return jsonify({"message": "Interaction updated successfully!"})
+        if not all([interaction_type, details, interaction_date]):
+            return jsonify({"error": "Missing required fields"}), 400
+
+        with db.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE Interactions
+                SET interaction_type = %s, details = %s, interaction_date = %s
+                WHERE id = %s
+                """,
+                (interaction_type, details, interaction_date, interaction_id)
+            )
+            db.commit()
+
+        return jsonify({"message": "Interaction updated successfully!"}), 200
+    except Exception as e:
+        app.logger.error(f"Error updating interaction: {e}")
+        return jsonify({"error": "Failed to update interaction."}), 500
+
+
 
 # Route to delete an interaction
-@app.route('/interactions/<int:interaction_id>', methods=['DELETE'])
+@app.route('/api/interactions/<int:interaction_id>', methods=['DELETE'])
 def delete_interaction(interaction_id):
-    with db.cursor() as cursor:
-        cursor.execute("DELETE FROM Interactions WHERE id = %s", (interaction_id,))
-        db.commit()
-    return jsonify({"message": "Interaction deleted successfully!"})
+    """
+    Delete an interaction by ID.
+    """
+    try:
+        with db.cursor() as cursor:
+            cursor.execute("DELETE FROM Interactions WHERE id = %s", (interaction_id,))
+            db.commit()
+        return jsonify({"message": "Interaction deleted successfully!"}), 200
+    except Exception as e:
+        app.logger.error(f"Error deleting interaction: {e}")
+        return jsonify({"error": "Failed to delete interaction."}), 500
+
+
 
 # Events Management API
 
@@ -392,30 +490,45 @@ def events_page():
     """
     return render_template('events.html')
 
-# Route to get all events
-@app.route('/events', methods=['GET'])
-def get_events():
+
+@app.route('/api/events', methods=['GET'])
+def api_get_events():
     """
-    Fetch all events from the Events table.
+    Fetch and return all events as JSON data.
     """
     with db.cursor() as cursor:
-        cursor.execute("SELECT * FROM Events")
+        cursor.execute("""
+            SELECT 
+                e.id, 
+                e.name, 
+                e.description, 
+                DATE_FORMAT(e.event_date, '%Y-%m-%d') AS event_date, 
+                e.location, 
+                u.name AS organizer
+            FROM Events e
+            JOIN Users u ON e.organizer_id = u.id
+        """)
         events = cursor.fetchall()
     return jsonify(events)
 
-# Route to add a new event
-@app.route('/events', methods=['POST'])
+
+
+
+@app.route('/api/events', methods=['POST'])
 def add_event():
     """
     Add a new event to the Events table.
-    Requires: name, description, event_date, location, and organizer_id in the request body.
     """
     data = request.get_json()
+
     name = data.get('name')
     description = data.get('description')
     event_date = data.get('event_date')
     location = data.get('location')
     organizer_id = data.get('organizer_id')
+
+    if not all([name, description, event_date, location, organizer_id]):
+        return jsonify({"error": "Missing required fields"}), 400
 
     with db.cursor() as cursor:
         cursor.execute(
@@ -426,165 +539,135 @@ def add_event():
             (name, description, event_date, location, organizer_id)
         )
         db.commit()
+
     return jsonify({"message": "Event added successfully!"}), 201
 
-# Route to get a specific event by ID
-@app.route('/events/<int:event_id>', methods=['GET'])
+
+@app.route('/api/events/<int:event_id>', methods=['GET'])
 def get_event(event_id):
     """
     Fetch an event by its unique ID.
     """
-    with db.cursor() as cursor:
-        cursor.execute("SELECT * FROM Events WHERE id = %s", (event_id,))
-        event = cursor.fetchone()
-    if event:
-        return jsonify(event)
-    else:
-        return jsonify({"error": "Event not found"}), 404
+    try:
+        with db.cursor() as cursor:
+            
+            cursor.execute("""
+                SELECT 
+                    e.id, 
+                    e.name, 
+                    e.description, 
+                    DATE_FORMAT(e.event_date, '%Y-%m-%d') AS event_date, 
+                    e.location, 
+                    u.id AS organizer_id
+                FROM Events e
+                JOIN Users u ON e.organizer_id = u.id
+                WHERE e.id = %s
+            """, (event_id,))
+            event = cursor.fetchone()
 
-# Route to update an event
-@app.route('/events/<int:event_id>', methods=['PUT'])
+        
+        if event:
+            
+            event_data = {
+                "id": event["id"],
+                "name": event["name"],
+                "description": event["description"],
+                "event_date": event["event_date"],
+                "location": event["location"],
+                "organizer_id": event["organizer_id"]
+            }
+            return jsonify(event_data)
+        else:
+            
+            return jsonify({"error": "Event not found"}), 404
+
+    except Exception as e:
+        
+        app.logger.error(f"Error fetching event with ID {event_id}: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+
+
+
+@app.route('/api/events/<int:event_id>', methods=['PUT'])
 def update_event(event_id):
+    """
+    Update an existing event by its ID.
+    """
     data = request.get_json()
     name = data.get('name')
     description = data.get('description')
     event_date = data.get('event_date')
     location = data.get('location')
+    organizer_id = data.get('organizer_id')  
+
+    if not all([name, description, event_date, location, organizer_id]):  
+        return jsonify({"error": "Missing required fields"}), 400
 
     with db.cursor() as cursor:
         cursor.execute(
             """
             UPDATE Events
-            SET name = %s, description = %s, event_date = %s, location = %s
+            SET name = %s, description = %s, event_date = %s, location = %s, organizer_id = %s
             WHERE id = %s
             """,
-            (name, description, event_date, location, event_id)
+            (name, description, event_date, location, organizer_id, event_id)
         )
         db.commit()
+
     return jsonify({"message": "Event updated successfully!"})
 
-# Route to delete an event
-@app.route('/events/<int:event_id>', methods=['DELETE'])
+
+
+@app.route('/api/events/<int:event_id>', methods=['DELETE'])
 def delete_event(event_id):
+    """
+    Delete an event by its ID.
+    """
     with db.cursor() as cursor:
         cursor.execute("DELETE FROM Events WHERE id = %s", (event_id,))
         db.commit()
     return jsonify({"message": "Event deleted successfully!"})
 
-# Attachments Management API
-
-@app.route('/attachments', methods=['GET'])
-def attachments_page():
-    """
-    Render the attachments management page.
-    """
-    return render_template('attachments.html')
-
-# Route to get all attachments
-@app.route('/attachments', methods=['GET'])
-def get_attachments():
-    """
-    Fetch all attachments from the Attachments table.
-    """
-    with db.cursor() as cursor:
-        cursor.execute("SELECT * FROM Attachments")
-        attachments = cursor.fetchall()
-    return jsonify(attachments)
-
-# Route to add a new attachment
-@app.route('/attachments', methods=['POST'])
-def add_attachment():
-    """
-    Add a new attachment to the Attachments table.
-    Requires: interaction_id or event_id, filename, file_url, and uploaded_by in the request body.
-    """
-    data = request.get_json()
-    interaction_id = data.get('interaction_id')
-    event_id = data.get('event_id')
-    filename = data.get('filename')
-    file_url = data.get('file_url')
-    uploaded_by = data.get('uploaded_by')
-
-    with db.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO Attachments (interaction_id, event_id, filename, file_url, uploaded_by) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (interaction_id, event_id, filename, file_url, uploaded_by)
-        )
-        db.commit()
-    return jsonify({"message": "Attachment added successfully!"}), 201
-
-# Route to get a specific attachment by ID
-@app.route('/attachments/<int:attachment_id>', methods=['GET'])
-def get_attachment(attachment_id):
-    """
-    Fetch an attachment by its unique ID.
-    """
-    with db.cursor() as cursor:
-        cursor.execute("SELECT * FROM Attachments WHERE id = %s", (attachment_id,))
-        attachment = cursor.fetchone()
-    if attachment:
-        return jsonify(attachment)
-    else:
-        return jsonify({"error": "Attachment not found"}), 404
-
-# Route to delete an attachment by ID
-@app.route('/attachments/<int:attachment_id>', methods=['DELETE'])
-def delete_attachment(attachment_id):
-    """
-    Delete an attachment by its unique ID.
-    """
-    with db.cursor() as cursor:
-        cursor.execute("DELETE FROM Attachments WHERE id = %s", (attachment_id,))
-        db.commit()
-    return jsonify({"message": "Attachment deleted successfully!"})
-
 # AI Tools Log Management API
 
-# Route to get all AI tools log entries
-@app.route('/ai-tools-log', methods=['GET'])
-def get_ai_tools_log():
-    """
-    Fetch all AI tools log entries from the AI_Tools_Log table.
-    """
-    with db.cursor() as cursor:
-        cursor.execute("SELECT * FROM AI_Tools_Log")
-        log_entries = cursor.fetchall()
-    return jsonify(log_entries)
 
-# Route to add a new AI tools log entry
-@app.route('/ai-tools-log', methods=['POST'])
-def add_ai_tools_log():
+@app.route('/api/ai_tools', methods=['POST'])
+def ai_tools():
     """
-    Add a new entry to the AI_Tools_Log table.
-    Requires: user_id, query, and optionally response in the request body.
+    Process a user's query, generate a response, and return it.
     """
-    data = request.get_json()
-    user_id = data.get('user_id')
-    query = data.get('query')
-    response = data.get('response')
+    try:
+        # 获取前端传来的查询数据
+        data = request.get_json()
+        user_id = data.get('user_id')  # 示例中提供的用户ID
+        query = data.get('query')
 
-    with db.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO AI_Tools_Log (user_id, query, response) VALUES (%s, %s, %s)",
-            (user_id, query, response)
-        )
-        db.commit()
-    return jsonify({"message": "AI tools log entry added successfully!"}), 201
+        if not query:
+            return jsonify({"error": "Query cannot be empty"}), 400
 
-# Route to get a specific AI tools log entry by ID
-@app.route('/ai-tools-log/<int:log_id>', methods=['GET'])
-def get_ai_tools_log_entry(log_id):
-    """
-    Fetch an AI tools log entry by its unique ID.
-    """
-    with db.cursor() as cursor:
-        cursor.execute("SELECT * FROM AI_Tools_Log WHERE id = %s", (log_id,))
-        log_entry = cursor.fetchone()
-    if log_entry:
-        return jsonify(log_entry)
-    else:
-        return jsonify({"error": "AI tools log entry not found"}), 404
+        # 假设AI的简单逻辑生成响应
+        ai_response = f"AI Response for: {query}"  # 这里是模拟AI逻辑
+
+        return jsonify({
+            "query": query,
+            "response": ai_response
+        }), 200
+    except Exception as e:
+        app.logger.error(f"Error in AI Tools: {e}")
+        return jsonify({"error": "Failed to process AI tools request."}), 500
+        
+        
+
+        # 将日志数据返回给前端
+        return jsonify(logs), 200
+    except Exception as e:
+        app.logger.error(f"Error fetching AI Tools logs: {e}")
+        return jsonify({"error": "Failed to retrieve AI tools logs"}), 500
+
+
+
 
 # Statistics API
 
@@ -619,6 +702,74 @@ def user_interactions(user_id):
         cursor.execute("SELECT * FROM Interactions WHERE user_id = %s", (user_id,))
         interactions = cursor.fetchall()
     return jsonify(interactions)
+
+@app.route('/api/stats')
+def get_stats():
+    """
+    Route to fetch and return interaction statistics and user growth data.
+    """
+    # SQL query for interaction type statistics
+    interaction_query = """
+        SELECT interaction_type, COUNT(id) AS count
+        FROM interactions
+        GROUP BY interaction_type
+    """
+    # SQL query for user growth statistics by month
+    user_growth_query = """
+        SELECT DATE_FORMAT(created_at, '%Y-%m') AS month, COUNT(id) AS 
+count
+        FROM users
+        GROUP BY month
+        ORDER BY month
+    """
+    
+    # SQL query for total events count
+    total_events_query = """
+        SELECT COUNT(*) AS total_events
+        FROM events
+    """
+    
+
+    try:
+        # Initialize empty data structures
+        interaction_data = {}
+        user_growth_data = []
+        total_events = 0
+
+        # Execute SQL queries
+        with db.cursor() as cursor:
+            # Fetch interaction statistics
+            cursor.execute(interaction_query)
+            interaction_stats = cursor.fetchall()
+            for row in interaction_stats:
+                interaction_data[row['interaction_type']] = row['count']
+
+            # Fetch user growth statistics
+            cursor.execute(user_growth_query)
+            user_growth_stats = cursor.fetchall()
+            for row in user_growth_stats:
+                user_growth_data.append({
+                    "month": row['month'],
+                    "count": row['count']
+                })
+                
+            # Fetch total events count
+            cursor.execute(total_events_query)
+            total_events_result = cursor.fetchone()
+            total_events = total_events_result['total_events']
+
+
+        # Format the response as JSON
+        return jsonify({
+            "interaction_data": interaction_data,
+            "user_growth_data": user_growth_data,
+            "total_events": total_events
+        })
+
+    except Exception as e:
+        # Log the error and return an appropriate response
+        app.logger.error(f"Database query failed: {e}")
+        return jsonify({"error": "Failed to retrieve statistics"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)

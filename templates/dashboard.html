@@ -86,32 +86,42 @@
     </style>
     <script>
         // Load statistics dynamically
-        function loadStats() {
-            fetch('/api/stats')
-                .then(response => response.json())
-                .then(stats => {
-                    document.getElementById('total-users').innerText = 
-stats.user_count;
-                    document.getElementById('total-interactions').innerText = 
-stats.interaction_count;
-                    document.getElementById('total-events').innerText = 
-stats.event_count;
+       function loadStats() {
+    fetch('/api/stats')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to fetch stats');
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Update total statistics
+            const totalUsers = data.user_growth_data.reduce((sum, item) => sum + item.count, 0);
+            const totalInteractions = Object.values(data.interaction_data).reduce((sum, count) => sum + count, 0);
+            const totalEvents = data.total_events || 0;
 
-                    const interactionTable = 
-document.getElementById('interaction-table');
-                    interactionTable.innerHTML = '';
-                    stats.interaction_types.forEach(interaction => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = 
-`<td>${interaction.type}</td><td>${interaction.count}</td>`;
-                        interactionTable.appendChild(row);
-                    });
-                })
-                .catch(error => console.error('Error loading stats:', 
-error));
-        }
+            document.getElementById('total-users').innerText = totalUsers || '0';
+            document.getElementById('total-interactions').innerText = totalInteractions || '0';
+            document.getElementById('total-events').innerText = totalEvents || '0';
 
-        document.addEventListener('DOMContentLoaded', loadStats);
+            // Update interaction types table
+            const interactionTable = document.getElementById('interaction-table');
+            interactionTable.innerHTML = ''; // Clear existing rows
+            for (const [type, count] of Object.entries(data.interaction_data)) {
+                const row = document.createElement('tr');
+                row.innerHTML = `<td>${type}</td><td>${count}</td>`;
+                interactionTable.appendChild(row);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading stats:', error);
+            document.getElementById('total-users').innerText = 'Error';
+            document.getElementById('total-interactions').innerText = 'Error';
+            document.getElementById('total-events').innerText = 'Error';
+        });
+}
+
+document.addEventListener('DOMContentLoaded', loadStats);
     </script>
 </head>
 <body>
@@ -138,9 +148,27 @@ error));
             <a href="/users" class="btn btn-primary ">Manage Users</a>
             <a href="/events" class="btn btn-primary">Manage Events</a>
             <a href="/interactions" class="btn btn-primary">Manage Interactions</a>
-            <a href="/attachments" class="btn btn-primary">Manage Attachments</a>
             <a href="/logout">Log Out</a>
         </div>
+        <div class="container mt-4">
+    <h3>Batch Upload Data</h3>
+    <form id="upload-form">
+        <input type="file" id="file-input" accept=".csv" />
+        <button type="submit" class="btn btn-primary mt-2">Upload</button>
+    </form>
+    <div id="upload-status" style="margin-top: 10px;"></div>
+</div>
+
+	<div class="export-section">
+    <label for="export-table">Select a Table to Export:</label>
+    <select id="export-table" class="form-control">
+        <option value="events">Events</option>
+        <option value="interactions">Interactions</option>
+        <option value="users">Users</option>
+    </select>
+    <button class="btn btn-primary mt-2" onclick="exportTable()">Export</button>
+</div>
+
         <div class="table-container">
             <h2>Interaction Types Overview</h2>
             <table>
@@ -152,12 +180,128 @@ error));
                 </thead>
                 <tbody id="interaction-table">
                     <tr>
-                        <td colspan="2" class="text-center">Loading...</td>
+                        <td colspan="2" style="text-align: center;">Loading...</td>
                     </tr>
                 </tbody>
             </table>
         </div>
+        <div class="container mt-4">
+    <h2>AI Tools</h2>
+    <div class="input-group mb-3">
+        <input type="text" id="ai-query" class="form-control" placeholder="Enter your query">
+        <button class="btn btn-primary" onclick="submitQuery()">Ask AI</button>
     </div>
+    <div id="ai-response" class="alert alert-info" style="display: none;"></div>
+</div>
+<!-- AI Tools Log Section -->
+<div class="container mt-5">
+    <h2>AI Tools Log</h2>
+    <table class="table table-bordered">
+        <thead class="table-dark">
+            <tr>
+                <th>ID</th>
+                <th>User ID</th>
+                <th>Query</th>
+                <th>Response</th>
+                <th>Query Time</th>
+            </tr>
+        </thead>
+        <tbody id="ai-log-table">
+            <!-- AI logs will be dynamically populated here -->
+            <tr>
+                <td colspan="5" style="text-align: center;">Loading...</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+    </div>
+    <script>
+    function submitQuery() {
+        const query = document.getElementById('ai-query').value;
+        if (!query) {
+            alert("Query cannot be empty.");
+            return;
+        }
+
+        fetch('/api/ai_tools', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: 1, query })  // 示例用户ID
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to process query.');
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.error) {
+                alert(data.error);
+            } else {
+                const responseDiv = document.getElementById('ai-response');
+                responseDiv.innerText = `AI Response: ${data.response}`;
+                responseDiv.style.display = 'block';
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert("Failed to get AI response.");
+        });
+    }
+    
+    
+    document.getElementById('upload-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    const fileInput = document.getElementById('file-input');
+    if (!fileInput.files[0]) {
+        alert('Please select a file to upload.');
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    fetch('/api/upload', {
+        method: 'POST',
+        body: formData
+    })
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('upload-status').innerText = data.message || 'Upload successful!';
+        })
+        .catch(error => {
+            console.error('Error uploading file:', error);
+            document.getElementById('upload-status').innerText = 'Upload failed.';
+        });
+});
+
+function exportTable() {
+    const selectedTable = document.getElementById("export-table").value;
+    fetch(`/api/export?table=${selectedTable}`, {
+        method: "GET"
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error("Failed to export data");
+        }
+        return response.blob();
+    })
+    .then(blob => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.style.display = "none";
+        a.href = url;
+        a.download = `${selectedTable}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+    })
+    .catch(error => alert(`Error: ${error.message}`));
+}
+
+    
+</script>
 </body>
 </html>
 
